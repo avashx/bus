@@ -18,7 +18,9 @@ const corsOptions = {
     origin: function (origin, callback) {
         const allowedOrigins = [
             'https://bus-19wu.onrender.com', // Frontend URL
-            'http://localhost:3000'          // For local testing
+            'http://localhost:3000',         // For local testing (web app)
+            'http://localhost:8081',         // For Flutter app on emulator/simulator
+            'http://10.0.2.2:8081'          // For Flutter app on Android emulator
         ];
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
@@ -29,11 +31,11 @@ const corsOptions = {
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
-    optionsSuccessStatus: 200 // For legacy browsers
+    optionsSuccessStatus: 200
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // Handle preflight requests for all routes
+app.options('*', cors(corsOptions));
 
 app.use(express.static('public'));
 app.use(express.json());
@@ -144,8 +146,8 @@ const fetchBusData = async () => {
           routeName: routeMap.get(entity.vehicle.trip?.routeId) || entity.vehicle.trip?.routeId || 'Unknown',
           latitude: entity.vehicle.position.latitude,
           longitude: entity.vehicle.position.longitude,
-          checked: false, // Default value
-          stopsRemaining: 0 // Default value
+          checked: false,
+          stopsRemaining: 0
         }));
 
       if (db) {
@@ -155,7 +157,6 @@ const fetchBusData = async () => {
           const existingBus = busData.find(b => b.busNo === bus.busNo);
           const check = checkedBuses.find(cb => cb.busNo === bus.busNo);
 
-          // Initialize from DB if available
           if (check) {
             bus.checked = check.checked;
             bus.stopsRemaining = check.stopsRemaining || 0;
@@ -163,7 +164,6 @@ const fetchBusData = async () => {
             bus.fineCollected = check.fineCollected || 0;
           }
 
-          // Check proximity to stops and update stopsRemaining automatically
           const nearestStop = busStops.find(stop => 
             calculateDistance(bus.latitude, bus.longitude, stop.latitude, stop.longitude) < 0.05
           );
@@ -171,7 +171,6 @@ const fetchBusData = async () => {
           if (nearestStop && bus.checked) {
             const lastStop = check ? check.lastStop : null;
             if (lastStop !== nearestStop.name) {
-              // Bus has moved to a new stop, decrement stopsRemaining
               const newStopsRemaining = Math.max(0, bus.stopsRemaining - 1);
               await db.collection('busChecks').updateOne(
                 { busNo: bus.busNo },
@@ -179,7 +178,7 @@ const fetchBusData = async () => {
                   $set: { 
                     stopsRemaining: newStopsRemaining, 
                     lastStop: nearestStop.name,
-                    checked: newStopsRemaining > 0, // Uncheck if stopsRemaining reaches 0
+                    checked: newStopsRemaining > 0,
                     timestamp: new Date()
                   } 
                 },
@@ -196,7 +195,6 @@ const fetchBusData = async () => {
       busData = newBusData;
       console.log(`Fetched and updated ${busData.length} buses`);
 
-      // Emit updated bus data to all connected clients
       io.sockets.sockets.forEach((socket) => {
         const zoomLevel = clientZoomLevels.get(socket.id) || 0;
         const updateData = { buses: busData };
@@ -236,24 +234,6 @@ app.get('/', async (req, res) => {
   res.render('index', { buses: busData, busStops: [] });
 });
 
-
-app.get('/api/all-stops', async (req, res) => {
-  try {
-      const stopsCsvString = fs.readFileSync('data/stops.csv', 'utf8');
-      const stops = await parseCSV(stopsCsvString);
-      const stopList = stops.map(row => ({
-          name: row.stop_name || 'Unknown Stop',
-          latitude: parseFloat(row.stop_lat),
-          longitude: parseFloat(row.stop_lon)
-      }));
-      res.json(stopList);
-  } catch (err) {
-      console.error('Error fetching all stops:', err);
-      res.status(500).json({ error: 'Failed to fetch stops' });
-  }
-});
-
-
 // API to update bus check status
 app.post('/api/checkBus', async (req, res) => {
   console.log('Received /api/checkBus request:', req.body);
@@ -287,7 +267,6 @@ app.post('/api/checkBus', async (req, res) => {
     );
     console.log('Bus check updated:', result);
 
-    // Update busData immediately and emit to clients
     const bus = busData.find(b => b.busNo === busNo);
     if (bus) {
       bus.checked = true;
