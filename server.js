@@ -17,10 +17,11 @@ const io = new Server(server);
 const corsOptions = {
     origin: function (origin, callback) {
         const allowedOrigins = [
-            'https://bus-19wu.onrender.com', // Frontend URL
-            'http://localhost:3000',         // For local testing (web app)
-            'http://localhost:8081',         // For Flutter app on emulator/simulator
-            'http://10.0.2.2:8081'          // For Flutter app on Android emulator
+            'https://bus-19wu.onrender.com',        // Bus tracking app frontend
+            'https://dtconnect-app.onrender.com',   // Bus booking app frontend
+            'http://localhost:3000',                // Local testing (web app)
+            'http://localhost:8081',                // Flutter app on emulator/simulator
+            'http://10.0.2.2:8081'                 // Flutter app on Android emulator
         ];
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
@@ -128,7 +129,7 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-// Fetch bus data with retry logic and automatic stopsRemaining updates
+// Fetch bus data with retry logic
 const fetchBusData = async () => {
   let retries = 3;
   while (retries) {
@@ -154,7 +155,6 @@ const fetchBusData = async () => {
         const checkedBuses = await db.collection('busChecks').find({}).toArray();
 
         for (const bus of newBusData) {
-          const existingBus = busData.find(b => b.busNo === bus.busNo);
           const check = checkedBuses.find(cb => cb.busNo === bus.busNo);
 
           if (check) {
@@ -234,7 +234,74 @@ app.get('/', async (req, res) => {
   res.render('index', { buses: busData, busStops: [] });
 });
 
-// API to update bus check status
+// API to fetch the latest bus data
+app.get('/api/buses', async (req, res) => {
+  if (db) {
+    const checkedBuses = await db.collection('busChecks').find({}).toArray();
+    busData.forEach(bus => {
+      const check = checkedBuses.find(cb => cb.busNo === bus.busNo);
+      if (check) {
+        bus.stopsRemaining = check.stopsRemaining || 0;
+        bus.checked = check.checked;
+        bus.nonTicketHolders = check.nonTicketHolders || 0;
+        bus.fineCollected = check.fineCollected || 0;
+      }
+    });
+  }
+  res.json({ buses: busData, busStops: [] });
+});
+
+// API to fetch all stops
+app.get('/api/all-stops', async (req, res) => {
+  try {
+    const stopsCsvString = fs.readFileSync('data/stops.csv', 'utf8');
+    const stops = await parseCSV(stopsCsvString);
+    const stopList = stops.map(row => ({
+      name: row.stop_name || 'Unknown Stop',
+      latitude: parseFloat(row.stop_lat),
+      longitude: parseFloat(row.stop_lon)
+    }));
+    res.json(stopList);
+  } catch (err) {
+    console.error('Error fetching all stops:', err);
+    res.status(500).json({ error: 'Failed to fetch stops' });
+  }
+});
+
+// API to book a bus
+app.post('/api/bookBus', async (req, res) => {
+  console.log('Received /api/bookBus request:', req.body);
+  const { busNo, routeNo, pickupStop, dropoffStop, userId } = req.body;
+
+  if (!busNo || !routeNo || !pickupStop || !dropoffStop || !userId) {
+    console.error('Invalid request body:', req.body);
+    return res.status(400).json({ success: false, error: 'Missing required fields' });
+  }
+
+  if (!db) {
+    console.error('Database not connected');
+    return res.status(503).json({ success: false, error: 'Database not connected. Please try again later.' });
+  }
+
+  try {
+    const result = await db.collection('bookings').insertOne({
+      busNo,
+      routeNo,
+      pickupStop,
+      dropoffStop,
+      userId,
+      timestamp: new Date(),
+      status: 'confirmed',
+    });
+    console.log('Booking recorded:', result);
+    res.json({ success: true, result });
+  } catch (err) {
+    console.error('Error in /api/bookBus:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API to update bus check status (for tracking app)
 app.post('/api/checkBus', async (req, res) => {
   console.log('Received /api/checkBus request:', req.body);
   const { busNo, routeNo, nonTicketHolders, fineCollected } = req.body;
@@ -283,7 +350,7 @@ app.post('/api/checkBus', async (req, res) => {
   }
 });
 
-// API to record bus attendance
+// API to record bus attendance (for tracking app)
 app.post('/api/recordAttendance', async (req, res) => {
   console.log('Received /api/recordAttendance request:', req.body);
   const { busNo, routeNo, conductorId, conductorWaiver } = req.body;
